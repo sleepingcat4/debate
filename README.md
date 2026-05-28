@@ -1,0 +1,1 @@
+Repo for creating world's first competitive debate Language model. It is based on LAION-Debate dataset and its idea. While previously, ideas involving this have been explored and models produced but we want to reimagine this in the moment of advanced frontier nano and small models.
