@@ -10,14 +10,14 @@ import librosa
 import soundfile as sf
 
 
-REPO_ID = "teamsleeping/sleeping-debate"
-TRANSCRIBE_REPO_ID = "teamsleeping/sleeping-debate-transcribe"
+SOURCE_REPO = "teamsleeping/sleeping-debate"
+TRANSCRIBE_REPO = "teamsleeping/sleeping-debate-transcribe"
 
-OUTPUT_FILE = "filename.jsonl"
+OUTPUT_FILE = "transcribe.jsonl"
 FAILED_FILE = "failed.jsonl"
 
 BATCH_SIZE = 20
-MAX_DOWNLOAD_WORKERS = 20
+DOWNLOAD_WORKERS = 20
 
 
 def load_model():
@@ -29,13 +29,8 @@ def load_model():
         model_name="nvidia/parakeet-tdt-0.6b-v3"
     )
 
-    print(
-        "Updating self-attention model of Fast-Conformer encoder"
-    )
-
-    print(
-        "Attention context: left=256, right=256"
-    )
+    print("Updating self-attention model of Fast-Conformer encoder")
+    print("Attention context: left=256, right=256")
 
     asr_model.change_attention_model(
         self_attention_model="rel_pos_local_attn",
@@ -88,7 +83,7 @@ def get_wav_files():
     api = HfApi()
 
     files = api.list_repo_files(
-        repo_id=REPO_ID,
+        repo_id=SOURCE_REPO,
         repo_type="dataset"
     )
 
@@ -125,7 +120,7 @@ def download_file(filename):
             }
 
         downloaded_path = hf_hub_download(
-            repo_id=REPO_ID,
+            repo_id=SOURCE_REPO,
             filename=filename,
             repo_type="dataset",
             local_dir=os.getcwd()
@@ -149,25 +144,23 @@ def download_file(filename):
 
 def download_batch(batch):
     print("\n" + "-" * 80)
-    print(
-        f"DOWNLOADING {len(batch)} FILES"
-    )
+    print(f"DOWNLOADING {len(batch)} FILES")
     print("-" * 80)
 
     downloaded = []
     failed = []
 
     with ThreadPoolExecutor(
-        max_workers=MAX_DOWNLOAD_WORKERS
+        max_workers=DOWNLOAD_WORKERS
     ) as executor:
 
-        futures = [
+        futures = {
             executor.submit(
                 download_file,
                 filename
-            )
+            ): filename
             for filename in batch
-        ]
+        }
 
         for future in as_completed(futures):
 
@@ -236,10 +229,7 @@ def write_jsonl(handle, record):
     )
 
     handle.flush()
-
-    os.fsync(
-        handle.fileno()
-    )
+    os.fsync(handle.fileno())
 
 
 def write_failure(
@@ -309,16 +299,12 @@ def transcribe_one(
     try:
 
         print("\n" + "-" * 80)
-
         print(
             f"[TRANSCRIBING] {filename}"
         )
-
         print("-" * 80)
 
-        convert_to_mono(
-            local_path
-        )
+        convert_to_mono(local_path)
 
         output = asr_model.transcribe(
             [local_path],
@@ -327,10 +313,8 @@ def transcribe_one(
 
         result = output[0]
 
-        word_timestamps = (
-            extract_word_timestamps(
-                result.timestamp
-            )
+        word_timestamps = extract_word_timestamps(
+            result.timestamp
         )
 
         record = {
@@ -344,9 +328,7 @@ def transcribe_one(
             record
         )
 
-        elapsed = (
-            time.time() - start_time
-        )
+        elapsed = time.time() - start_time
 
         print(
             f"[DONE] {filename}"
@@ -357,13 +339,11 @@ def transcribe_one(
         )
 
         print(
-            f"Words: "
-            f"{len(word_timestamps)}"
+            f"Words: {len(word_timestamps)}"
         )
 
         print(
-            f"Transcript: "
-            f"{result.text[:200]}"
+            f"Transcript: {result.text[:200]}"
         )
 
         return True
@@ -394,9 +374,7 @@ def transcribe_one(
 
             try:
 
-                os.remove(
-                    local_path
-                )
+                os.remove(local_path)
 
                 print(
                     f"[DELETED] {filename}"
@@ -415,30 +393,48 @@ def upload_results():
     print("UPLOADING TRANSCRIPTIONS TO HUGGING FACE")
     print("=" * 80)
 
+    command = [
+        "hf",
+        "upload",
+        TRANSCRIBE_REPO,
+        OUTPUT_FILE,
+        "--repo-type=dataset"
+    ]
+
+    print(
+        "Running:",
+        " ".join(command)
+    )
+
     try:
 
         subprocess.run(
-            [
-                "huggingface-cli",
-                "upload",
-                TRANSCRIBE_REPO_ID,
-                OUTPUT_FILE,
-                ".",
-                "--repo-type=dataset"
-            ],
+            command,
             check=True
         )
 
         print(
-            "[HF UPLOAD COMPLETE]"
+            "\n[HF UPLOAD COMPLETE]"
         )
 
         return True
 
+    except subprocess.CalledProcessError as e:
+
+        print(
+            f"\n[HF UPLOAD FAILED]"
+        )
+
+        print(
+            f"Exit code: {e.returncode}"
+        )
+
+        return False
+
     except Exception as e:
 
         print(
-            f"[HF UPLOAD FAILED] {e}"
+            f"\n[HF UPLOAD FAILED] {e}"
         )
 
         return False
@@ -453,31 +449,27 @@ def process_dataset():
     print("=" * 80)
 
     print(
-        f"Source repo       : {REPO_ID}"
+        f"Source repository     : {SOURCE_REPO}"
     )
 
     print(
-        f"Transcript repo   : "
-        f"{TRANSCRIBE_REPO_ID}"
+        f"Transcript repository : {TRANSCRIBE_REPO}"
     )
 
     print(
-        f"Download batch    : {BATCH_SIZE}"
+        f"Download batch        : {BATCH_SIZE}"
     )
 
     print(
-        f"Download workers  : "
-        f"{MAX_DOWNLOAD_WORKERS}"
+        f"Download workers      : {DOWNLOAD_WORKERS}"
     )
 
     print(
-        f"Output            : "
-        f"{OUTPUT_FILE}"
+        f"Transcript file       : {OUTPUT_FILE}"
     )
 
     print(
-        f"Failures          : "
-        f"{FAILED_FILE}"
+        f"Failed file           : {FAILED_FILE}"
     )
 
     print("=" * 80)
@@ -604,11 +596,8 @@ def process_dataset():
                 )
 
                 if success:
-
                     completed_count += 1
-
                 else:
-
                     failed_count += 1
 
                 elapsed = (
@@ -646,7 +635,11 @@ def process_dataset():
 
                 print("-" * 80)
 
-            print("\n")
+            print("\n" + "=" * 80)
+            print(
+                f"BATCH {batch_number} COMPLETE"
+            )
+            print("=" * 80)
 
             upload_results()
 
@@ -675,12 +668,12 @@ def process_dataset():
     )
 
     print(
-        f"Local JSONL : "
+        f"Local transcript : "
         f"{os.path.abspath(OUTPUT_FILE)}"
     )
 
     print(
-        f"Failed JSONL: "
+        f"Local failures   : "
         f"{os.path.abspath(FAILED_FILE)}"
     )
 
